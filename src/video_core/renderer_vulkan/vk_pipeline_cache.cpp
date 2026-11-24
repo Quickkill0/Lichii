@@ -2742,7 +2742,19 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) noexc
     // A native draw counts as depth-tested only when every render target it writes color into
     // was first written in an earlier frame, which the title redraws every frame: Mario Kart World
     // bakes terrain once with depth-tested draws (b7980efd7), and a bound depth buffer alone
-    // doesn't test (Eglantine #874). Mesh draws wait unless the mesh skip setting is on.
+    // doesn't test (Eglantine #874). Mesh draws follow the same rules unless a stage writes
+    // storage: a new task/mesh pipeline can take the driver seconds to build, and waiting for it
+    // froze Ocarina of Time for 3.3 s on an RTX 4090 when it entered a new area.
+    const bool mesh = regs.IsMeshEnabled();
+    const bool stages_allow_skip = NativeStagesAllowSkip(mesh, pipeline->WritesStorage());
+    if (native && mesh && !stages_allow_skip && mode != NativePendingMode::Wait) {
+        static std::atomic<u32> logged{};
+        if (logged.fetch_add(1, std::memory_order_relaxed) < 16) {
+            LOG_INFO(Render_Vulkan,
+                     "Mesh pipeline {:016x} is still building and writes storage: its draw waits",
+                     pipeline->Key().Hash());
+        }
+    }
     const auto writes_color = [&regs](u32 rt_index) {
         return rt_index < Maxwell::NumRenderTargets &&
                regs.rt[rt_index].format != Tegra::RenderTargetFormat::NONE &&
@@ -2751,7 +2763,7 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) noexc
     const bool depth_tested =
         native
             ? mode != NativePendingMode::Wait && regs.zeta_enable != 0 &&
-                  regs.depth_test_enable != 0 && !regs.IsMeshEnabled() &&
+                  regs.depth_test_enable != 0 && stages_allow_skip &&
                   ColorWritesHaveHistory(
                       std::min<u32>(regs.rt_control.count,
                                     static_cast<u32>(Maxwell::NumRenderTargets)),

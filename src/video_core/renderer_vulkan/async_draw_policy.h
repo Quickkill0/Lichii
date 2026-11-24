@@ -56,6 +56,15 @@ constexpr bool ColorWritesHaveHistory(u32 count, Map&& map, Writes&& writes,
     return writes_any;
 }
 
+/// Whether a native draw's stages let it be skipped while its pipeline builds. A task or mesh
+/// program that writes storage can fill buffers later work reads, so that draw waits; other mesh
+/// draws follow the same rules as vertex draws.
+/// @param mesh           The draw runs task/mesh programs.
+/// @param writes_storage A stage of its pipeline writes storage buffers, images or global memory.
+constexpr bool NativeStagesAllowSkip(bool mesh, bool writes_storage) {
+    return !mesh || !writes_storage;
+}
+
 /// How a native draw with an unbuilt pipeline is handled (the native_async_draws setting).
 enum class NativePendingMode { Wait, Bounded, Skip };
 
