@@ -404,8 +404,15 @@ Shader::RuntimeInfo MakeRuntimeInfo(std::span<const Shader::IR::Program> program
     // undo the scaling, so all three keep native noperspective interpolation.
     const bool geometry_passthrough{key.unique_hashes[4] != 0 &&
                                     programs[4].is_geometry_passthrough};
-    if (key.unique_hashes[5] != 0 && !geometry_passthrough && key.state.xfb_enabled == 0 &&
-        !programs[5].info.loads_indexed_attributes) {
+    // Test build only: EDEN_NX2_NOPERSPECTIVE_EMULATION=0 keeps native noperspective varyings.
+    static const bool emulate_noperspective{[] {
+        const char* value{std::getenv("EDEN_NX2_NOPERSPECTIVE_EMULATION")};
+        const bool on{!(value && value[0] == '0')};
+        LOG_INFO(Render_Vulkan, "Noperspective emulation: {}", on ? "on" : "off");
+        return on;
+    }()};
+    if (emulate_noperspective && key.unique_hashes[5] != 0 && !geometry_passthrough &&
+        key.state.xfb_enabled == 0 && !programs[5].info.loads_indexed_attributes) {
         const bool has_tess{key.unique_hashes[3] != 0};
         const bool last_pre_raster{
             (stage == Shader::Stage::VertexB && !has_tess && !has_geometry) ||

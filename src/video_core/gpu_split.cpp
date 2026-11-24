@@ -671,9 +671,10 @@ std::optional<GpuSplit::SettledWord> GpuSplit::SettledWordAt(const Tegra::Memory
         why = AcquireUnsettled::Unknown;
         return std::nullopt;
     }
-    auto& shadow = Tegra::Nx2MirrorShadow::Get();
-    // Mirrored releases into a diverted word change what acquires read there without a note.
-    if (memory.OverlapsSyncpointShim(address, sizeof(u32)) || shadow.Diverts(device_address)) {
+    // Mirrored releases are noted as unknown writes wherever they land (Puller): once they landed,
+    // a word Nx2MirrorShadow diverts reads from the shadow as acquires do.
+    if (memory.OverlapsSyncpointShim(address, sizeof(u32)) ||
+        (SyncFixOff() && Tegra::Nx2MirrorShadow::Get().Diverts(device_address))) {
         why = AcquireUnsettled::Elsewhere;
         return std::nullopt;
     }
@@ -683,9 +684,11 @@ std::optional<GpuSplit::SettledWord> GpuSplit::SettledWordAt(const Tegra::Memory
     }
     FlushState();
     // Shader stores are placed nowhere, and the back marks the pages they write GPU-written only
-    // as it runs them (NoteCacheWrite): each one sent may write the word.
-    const u64 others =
-        (std::max)(OtherWritesTarget(memory, address), (std::min)(last_any_write, write_position));
+    // as it runs them (NoteCacheWrite). Switch 2 releases its sync words through semaphores, not
+    // shader stores, so stores sent since only keep a value from deciding an acquire falls short.
+    const u64 stores = (std::min)(last_any_write, write_position);
+    const u64 others = SyncFixOff() ? (std::max)(OtherWritesTarget(memory, address), stores)
+                                    : OtherWritesTarget(memory, address);
     const auto queued = QueuedSemaphoreWriteAt(device_address);
     if (queued && (!queued->known || queued->at_least)) {
         why = AcquireUnsettled::Unknown;
@@ -702,14 +705,16 @@ std::optional<GpuSplit::SettledWord> GpuSplit::SettledWordAt(const Tegra::Memory
             why = AcquireUnsettled::Fenced;
             return std::nullopt;
         }
-        return SettledWord{queued->payload, queued->position};
+        return SettledWord{queued->payload, queued->position, queued->position < stores};
     }
+    const bool over_stores = !Ran(stores);
     const u32 guest = memory.Read<u32>(address);
     if (Tegra::Nx2ListIndirect::IsPlaceholder(guest)) {
         why = AcquireUnsettled::Writes;
         return std::nullopt;
     }
-    return SettledWord{shadow.Read(device_address, guest).value_or(guest), std::nullopt};
+    return SettledWord{Tegra::Nx2MirrorShadow::Get().Read(device_address, guest).value_or(guest),
+                       std::nullopt, over_stores};
 }
 
 GpuSplit::FencedHold GpuSplit::TrackFencedWrite() {
@@ -1867,13 +1872,14 @@ void GpuSplit::ReportAcquire() {
              "latch, {} drained ({} by the 1 ms valve; {} equal or mask (of them on a word queued "
              "work may still change: {} read elsewhere, {} released an unknown value, {} with "
              "other writes queued, {} with unnoted releases, {} released by a fence yet to "
-             "run), {} by the settings, {} unmapped or GPU-written word, {} queued release "
-             "unknown or short), {} polls waited "
+             "run, {} short with stores queued), {} by the settings, {} unmapped or GPU-written "
+             "word, {} queued release unknown or short), {} polls waited "
              "without a drain in 10 s; polls: {} of acquires, {} of GPU-written list copies; "
              "back: {} waits for work, {} slept, {:.1f} ms spinning; {} early publishes, {} idle "
              "hooks asked by polls",
              passed, by_queued, latched, drained, valve_drains, drain_operation, unsettled[0],
-             unsettled[1], unsettled[2], unsettled[3], unsettled[4], drain_settings, drain_word,
+             unsettled[1], unsettled[2], unsettled[3], unsettled[4], unsettled[5], drain_settings,
+             drain_word,
              drain_queued, polls, acquire_polls, list_polls, back_waits, back_sleeps, spin_ms,
              early_publishes, settles);
     LOG_INFO(HW_GPU,

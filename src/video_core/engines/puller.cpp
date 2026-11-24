@@ -159,6 +159,9 @@ AcquireCheck CheckWithoutDrain(DmaPusher& dma_pusher, const Puller::PendingAcqui
         VideoCommon::Count(stats.drain_operation);
         if (!settled) {
             VideoCommon::Count(stats.unsettled[static_cast<size_t>(why)]);
+        } else if (settled->over_stores) {
+            VideoCommon::Count(
+                stats.unsettled[static_cast<size_t>(VideoCommon::AcquireUnsettled::Stores)]);
         }
         return AcquireCheck::Drain;
     }
@@ -469,11 +472,12 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
         if (auto& split = VideoCommon::GpuSplit::Get(); mirror != 0 && split.Active()) {
             const u64 size = four_words ? 16 : 4;
             split.NoteWrite(dma_pusher.memory_manager, mirror, size);
-            // It lands in guest memory as the release does, unless mirrored releases into the
-            // word go to Nx2MirrorShadow (which only grows): unvalued, it keeps QMD reductions
-            // there from taking memory for their base until it landed.
+            // It lands as the release does, in guest memory or Nx2MirrorShadow (whether the word
+            // diverts can change before the back runs it): unvalued, it keeps QMD reductions and
+            // acquires there from taking what they find for its value until it landed.
             if (const auto device = dma_pusher.memory_manager.GpuToCpuAddress(mirror);
-                device && !Nx2MirrorShadow::Get().Diverts(*device)) {
+                device && (!VideoCommon::SyncFixOff() ||
+                           !Nx2MirrorShadow::Get().Diverts(*device))) {
                 split.NoteUnknownWrites(*device, size, landing);
             }
         }

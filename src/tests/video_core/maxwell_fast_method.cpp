@@ -2748,8 +2748,10 @@ TEST_CASE("Split front passes equal and mask acquires only on what their word se
     drains(1);
     CHECK(unsettled(AcquireUnsettled::Writes) == writes + 1);
 
-    // Shader stores the back has yet to run, which may write any page: they mark it GPU-written
-    // only once they run.
+    // Shader stores the back has yet to run, which may write any page (they mark it GPU-written
+    // only once they run): sync words are released through semaphores, so a value that meets the
+    // acquire passes over them, and one that falls short drains.
+    const u64 stores = unsettled(AcquireUnsettled::Stores);
     release = false;
     split.Defer(
         [&release, before = stats.drained.load()] {
@@ -2760,9 +2762,15 @@ TEST_CASE("Split front passes equal and mask acquires only on what their word se
         0, VideoCommon::GpuSplit::Writes::Caches);
     split.Publish();
     CHECK(acquire(Mask, 2));
+    drains(0);
+    CHECK_FALSE(acquire(Equal, 12));
     drains(1);
-    CHECK(unsettled(AcquireUnsettled::Writes) == writes + 2);
-    // Nor does a release sent before them decide.
+    CHECK(unsettled(AcquireUnsettled::Stores) == stores + 1);
+    f.memory.Write<u32>(word, 12);
+    CHECK(dma_pusher.puller.ResumeAcquire(dma_pusher));
+    drains(0);
+    f.memory.Write<u32>(word, 10);
+    // A release sent before them decides likewise, once it landed.
     release = false;
     split.Defer([&release, before = stats.drained.load()] {
         while (VideoCommon::g_acquire_stats.drained.load() == before && !release.load()) {
@@ -2772,23 +2780,43 @@ TEST_CASE("Split front passes equal and mask acquires only on what their word se
     semaphore(11, OneWordRelease);
     split.Defer([] {}, 0, VideoCommon::GpuSplit::Writes::Caches);
     split.Publish();
+    const u64 fenced_before = unsettled(AcquireUnsettled::Fenced);
     CHECK_FALSE(acquire(Equal, 11)); // The release lands once its fence ran
     drains(1);
-    CHECK(unsettled(AcquireUnsettled::Writes) == writes + 3);
+    CHECK(unsettled(AcquireUnsettled::Fenced) == fenced_before + 1);
+    CHECK(unsettled(AcquireUnsettled::Writes) == writes + 1);
     fences.RunFence();
     CHECK(f.memory.Read<u32>(word) == 11);
     CHECK(dma_pusher.puller.ResumeAcquire(dma_pusher));
     drains(0);
 
-    // GPU acquires read a word mirrored releases go beside from the mirror shadow.
+    // GPU acquires read a word mirrored releases go beside from the mirror shadow: once what was
+    // sent there landed, the shadow decides. A mirrored release still queued leaves it unknown.
+    constexpr GPUVAddr mirror = MappedPages::gpu_address;
+    constexpr DAddr mirror_device = MappedPages::device_address;
+    const auto acquire_mirror = [&](u32 operation, u32 value) {
+        semaphore_at(mirror, value, operation);
+        return !dma_pusher.puller.HasPendingAcquire();
+    };
     const u64 elsewhere = unsettled(AcquireUnsettled::Elsewhere);
-    Tegra::Nx2AddSemaphoreRegion(word & ~GPUVAddr{0xfff});
-    Tegra::Nx2MirrorShadow::Get().NoteDirectRelease(word_device, word);
-    CHECK(acquire(Equal, 11));
+    const u64 mirror_unknown = unsettled(AcquireUnsettled::Unknown);
+    f.memory.Write<u32>(mirror, 11);
+    Tegra::Nx2AddSemaphoreRegion(mirror);
+    Tegra::Nx2MirrorShadow::Get().NoteDirectRelease(mirror_device, mirror);
+    Tegra::Nx2MirrorShadow::Get().Set(mirror_device, 12, 11);
+    CHECK(acquire_mirror(Equal, 12));
+    drains(0);
+    semaphore(13, OneWordRelease); // Mirrored to `mirror`
+    CHECK(acquire_mirror(Equal, 12));
     drains(1);
-    CHECK(unsettled(AcquireUnsettled::Elsewhere) == elsewhere + 1);
+    CHECK(unsettled(AcquireUnsettled::Unknown) == mirror_unknown + 1);
+    fences.RunFence();
+    CHECK(f.memory.Read<u32>(mirror) == 13);
+    CHECK(acquire_mirror(Equal, 13));
+    drains(0);
+    CHECK(unsettled(AcquireUnsettled::Elsewhere) == elsewhere);
     Tegra::Nx2MirrorShadow::Get().Clear();
-    Tegra::Nx2RemoveSemaphoreRegion(word & ~GPUVAddr{0xfff});
+    Tegra::Nx2RemoveSemaphoreRegion(mirror);
 
     // A list word the back owes reads as its placeholder until it lands (Nx2NoteOwedListWord),
     // bit 31 set: what memory holds there decides nothing.
@@ -2818,8 +2846,9 @@ TEST_CASE("Split front passes equal and mask acquires only on what their word se
     drains(0);
     f.memory.Write<u32>(word, 11);
 
-    // A state block the front still holds may issue a deferred draw, whose shader stores may write
-    // the word: it is sent first, and the acquire waits for it (held until the acquire drains).
+    // A state block the front still holds may issue a deferred draw: it is sent first. Its shader
+    // stores don't hold a met acquire (the back holds the entry before it until the test releases
+    // it).
     const u64 blocked = unsettled(AcquireUnsettled::Writes);
     release = false;
     split.Defer(
@@ -2835,8 +2864,8 @@ TEST_CASE("Split front passes equal and mask acquires only on what their word se
                      {f.fast.dirty.tables[0][state_method], f.fast.dirty.tables[1][state_method]},
                      false, true);
     CHECK(acquire(Equal, 11));
-    drains(1);
-    CHECK(unsettled(AcquireUnsettled::Writes) == blocked + 1);
+    drains(0);
+    CHECK(unsettled(AcquireUnsettled::Writes) == blocked);
     CHECK(f.fast.regs.reg_array[state_method] == 0x1234);
     release = true;
     split.Drain(VideoCommon::DrainSite::Other);

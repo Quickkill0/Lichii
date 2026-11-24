@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <functional>
@@ -64,14 +65,25 @@ enum class DrainSite : u32 {
     Count,
 };
 
+/// Test build only, not for merge: EDEN_NX2_SYNC_FIX=0 restores the acquire checks as they were
+/// before the mirror shadow and shader store changes, for an A/B in one build.
+inline bool SyncFixOff() {
+    static const bool off = [] {
+        const char* value = std::getenv("EDEN_NX2_SYNC_FIX");
+        return value != nullptr && value[0] == '0';
+    }();
+    return off;
+}
+
 /// Why the front can't tell what an equal or mask acquire's word holds once the back ran what was
 /// sent (GpuSplit::SettledWordAt), counted with the acquires.
 enum class AcquireUnsettled : u32 {
-    Elsewhere, ///< Acquires read it from the syncpoint shim or the mirror shadow
+    Elsewhere, ///< Acquires read it from the syncpoint shim
     Unknown,   ///< The last release noted there has an unknown value or a lower bound
     Writes,    ///< The back has yet to run another write sent there, or one after the note
     Unnoted,   ///< A release the front did not note may land yet
     Fenced,    ///< The last release noted there lands once its fence ran, and has not yet
+    Stores,    ///< It falls short, and queued draws or dispatches may still store to it
     Count,
 };
 
@@ -996,6 +1008,9 @@ public:
     struct SettledWord {
         u32 value;
         std::optional<u64> release; ///< The position the back runs the noted release by
+        /// Draws or dispatches sent after it may still store to the word through the GPU caches:
+        /// the value decides only a met acquire.
+        bool over_stores{};
     };
     /// What an acquire of the word at `address` (`device_address`) finds once the back ran
     /// everything sent so far, where the front knows that exactly, as FrontQmdView::WordAt values
