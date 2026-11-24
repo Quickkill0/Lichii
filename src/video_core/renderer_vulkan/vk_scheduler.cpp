@@ -255,6 +255,14 @@ bool Scheduler::IdleGpuAwaitsWork() {
     // release) waits for the GPU to run all of it. 100 us left the least of that wait among 50,
     // 100 and 200 us.
     static constexpr auto age = std::chrono::microseconds{100};
+    // A/B switch for this test build only: EDEN_NX2_EARLY_SUBMIT=0 turns the probe off.
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_EARLY_SUBMIT");
+        return value == nullptr || value[0] != '0';
+    }();
+    if (!enabled) {
+        return false;
+    }
     // Don't wait for a follower packet just to probe. A deferred clear belongs to the next pass.
     if ((render_recorders && VideoCommon::GpuSplit::BackHasPendingRender()) || state.renderpass ||
         deferred_clear.framebuffer || !RecordedSinceSubmit()) {
