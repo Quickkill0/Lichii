@@ -81,6 +81,13 @@ constexpr NativeDrawAction DecideNativePending(NativePendingMode mode, bool can_
     return NativeDrawAction::WaitTimed;
 }
 
+/// How the current draw is treated while its pipeline builds.
+struct PendingDrawPolicy {
+    bool native{};
+    bool can_discard{};
+    NativePendingMode mode{NativePendingMode::Wait};
+};
+
 /// Waits for a pending pipeline at most what is left of this frame's wait budget, and takes the
 /// time spent from it.
 /// @param budget_left_us Microseconds left of this frame's wait budget.
@@ -97,6 +104,20 @@ bool WaitWithinBudget(s64& budget_left_us, s64& used_us, WaitFor&& wait_for) {
     budget_left_us -= spent;
     used_us += spent;
     return built;
+}
+
+/// Translation and driver compilation spend the same per-frame wait budget.
+template <typename Clock = std::chrono::steady_clock, typename Wait>
+bool WaitWithinNativeBudget(s64& budget_left_us, s64& used_us, Wait&& wait) {
+    if (budget_left_us <= 0) {
+        return false;
+    }
+    const auto begin = Clock::now();
+    const bool ready = wait(std::chrono::microseconds{budget_left_us});
+    const auto spent = std::chrono::ceil<std::chrono::microseconds>(Clock::now() - begin).count();
+    budget_left_us -= spent;
+    used_us += spent;
+    return ready;
 }
 
 } // namespace Vulkan
