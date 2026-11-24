@@ -378,10 +378,13 @@ private:
     /// EDEN_NX2_PENDING_WRITE_TRACE: logs bound buffer ranges with collected, unapplied CPU writes.
     void TracePendingCpuWrites(bool compute, std::span<const u64> shader_hashes);
     bool OcarinaTemporalEnabled() const;
+    /// Before OoT's first image: DLSS and FSR take only images at the game's own size, so with
+    /// either one upscaling the resolution scale goes to 1x.
+    void ApplyOcarinaResolution(u64 title_id);
     /// Offsets the viewport of Ocarina's scene draws (depth-tested, into the scene depth) by a
-    /// sub-pixel amount that changes every frame while FSR replaces the game's upscale, so FSR
-    /// gets new sample positions each frame (the game renders without jitter). The offset goes to
-    /// FSR with the frame.
+    /// sub-pixel amount that changes every frame while FSR or DLSS replaces the game's upscale,
+    /// so it gets new sample positions each frame (the game renders without jitter). The offset
+    /// goes to the upscaler with the frame.
     void UpdateOcarinaJitter();
     bool TryOcarinaUpscale(const ComputePipeline& pipeline, u64 native_key, bool replace);
     void ReadOcarinaActor(struct OcarinaActorMesh& mesh);
@@ -434,6 +437,7 @@ private:
     };
     std::optional<OcarinaCameraRefusal> oot_camera_refusal;
     mutable std::optional<VideoCommon::OcarinaUpscaleBackend> oot_backend;
+    bool oot_resolution_checked{};
     /// The game started at the DLSS Performance render scale (1920x1080).
     bool oot_performance_scale{};
     struct OcarinaMotionTrace {

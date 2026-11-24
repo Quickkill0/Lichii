@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cmath>
 #include <string_view>
 
 #include "common/common_types.h"
@@ -70,10 +71,19 @@ constexpr OcarinaUpscaleBackend SelectOcarinaUpscaler(bool fsr_enabled, bool dls
                                         : OcarinaUpscaleBackend::Native;
 }
 
-/// Texture LOD bias added to Ocarina's mipmapped samplers while FSR upscales. AMD recommends
-/// log2(render / output) - 1: -1.58 for docked 1440p -> 4K.
-constexpr float OcarinaFsrLodBias(OcarinaUpscaleBackend backend) {
-    return backend == OcarinaUpscaleBackend::Fsr ? -1.58f : 0.0f;
+/// Texture LOD bias added to Ocarina's mipmapped samplers while FSR or DLSS upscales. AMD
+/// recommends log2(render / output) - 1 (-1.58 for docked 1440p -> 4K), NVIDIA log2(render /
+/// output) for DLSS (-0.58 for 1440p -> 4K, 0 for DLAA).
+inline float OcarinaFsrLodBias(OcarinaUpscaleBackend backend, unsigned render_height = 1440,
+                               unsigned output_height = 2160) {
+    if (backend == OcarinaUpscaleBackend::Fsr) {
+        return -1.58f;
+    }
+    if (backend != OcarinaUpscaleBackend::Dlss || render_height == 0 ||
+        render_height >= output_height) {
+        return 0.0f;
+    }
+    return std::log2(static_cast<float>(render_height) / static_cast<float>(output_height));
 }
 
 /// Whether a sampler with that bias keeps it for an image: only docked (handheld isn't measured),

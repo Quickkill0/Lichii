@@ -5010,8 +5010,27 @@ void CustomBorderColorBudget::Release() noexcept {
 f32 TextureCacheRuntime::OcarinaFsrLodBias() {
     if (!ocarina_fsr_lod_bias) {
         const bool ocarina = Settings::GetCurrentProgramID() == 0x0400486024DEC000ULL;
+        // Docked render heights of the DLSS render scales (patch_manager.cpp); DLAA keeps 1440p.
+        unsigned render_height = 1440;
+        switch (Settings::AppliedOcarinaRenderScale().value_or(Settings::NvidiaDlssQuality::Quality)) {
+        case Settings::NvidiaDlssQuality::Balanced:
+            render_height = 1280;
+            break;
+        case Settings::NvidiaDlssQuality::Performance:
+            render_height = 1080;
+            break;
+        case Settings::NvidiaDlssQuality::UltraPerformance:
+            render_height = 720;
+            break;
+        default:
+            break;
+        }
+        const bool dlaa = Settings::GetNvidiaDlssRuntimeSettings().quality ==
+                          Settings::NvidiaDlssQuality::Native;
         ocarina_fsr_lod_bias =
-            ocarina ? VideoCommon::OcarinaFsrLodBias(ResolveOcarinaUpscaler(device)) : 0.0f;
+            ocarina ? VideoCommon::OcarinaFsrLodBias(ResolveOcarinaUpscaler(device), render_height,
+                                                     dlaa ? render_height : 2160)
+                    : 0.0f;
     }
     return *ocarina_fsr_lod_bias;
 }
