@@ -740,6 +740,26 @@ constexpr std::array TEXTURE_COMPACTION_RECORDS{
 };
 constexpr std::array TEXTURE_COMPACTION_STATE{BuiltinPatchState{0x4E9D200, 16}};
 
+// Shadow size steps (port of Frizti/Fritchii 1d4f849ece and 220dd0a7cd): the game gives each nearby
+// object its own square depth shadow map sized by its size on screen, so while the player moves
+// every side changes every frame and the host creates ~10-13 depth images a frame (2-5 ms in the
+// Castle Town pot room). The read of the side before the texture request (main+0x244100) goes
+// through a cave that rounds it up to a multiple of 64, so the image pool can reuse 25 sizes. The
+// projection is unchanged: a map gets at most 63 more texels a side.
+constexpr size_t SHADOW_STEPS_CAVE = 0x3C46DC0;
+constexpr std::array<u8, 4> SHADOW_STEPS_ORIGINAL{0xAA, 0xEA, 0x44, 0xB9}; // ldr w10, [x21, #0x4e8]
+constexpr std::array<u8, 4> SHADOW_STEPS_BRANCH{0x30, 0x0B, 0xE8, 0x14};   // b main+0x3C46DC0
+// ldr w10, [x21, #0x4e8] ; add w10, w10, #0x3f ; and w10, w10, #0xffffffc0 ; b main+0x244104
+constexpr std::array<u8, 16> SHADOW_STEPS_ROUTINE{
+    0xAA, 0xEA, 0x44, 0xB9, 0x4A, 0xFD, 0x00, 0x11, 0x4A, 0x65, 0x1A, 0x12, 0xCE, 0xF4, 0x17, 0x17,
+};
+static_assert(SHADOW_STEPS_CAVE >= 0x3C46C00 &&
+              SHADOW_STEPS_CAVE + SHADOW_STEPS_ROUTINE.size() <= TEXT_SPEED_CAVE);
+constexpr std::array SHADOW_STEPS_RECORDS{
+    BuiltinPatchRecord{0x244100, SHADOW_STEPS_BRANCH, SHADOW_STEPS_ORIGINAL},
+    BuiltinPatchRecord{SHADOW_STEPS_CAVE, SHADOW_STEPS_ROUTINE, {}, true},
+};
+
 constexpr std::array BUILTIN_PATCHES{
     // Ocarina of Time takes its "dynamic resolution disabled" path, so the 3D renders at full scale
     // instead of following the GPU-time controller down to its 480p floor.
@@ -870,6 +890,17 @@ constexpr std::array BUILTIN_PATCHES{
         .skip_on_cheat_overlap = true,
         .description = "Limits requests for new texture heap compaction rounds to once per guest "
                        "second. This may increase heap fragmentation. Restart the game to apply.",
+    },
+    BuiltinPatch{
+        .name = "Shadow Size Steps (built-in)",
+        .title_id = 0x0400486024DEC000,
+        .module = "main",
+        .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
+        .records = SHADOW_STEPS_RECORDS,
+        .skip_on_cheat_overlap = true,
+        .description = "Rounds each object's shadow map size up to a multiple of 64, so moving "
+                       "no longer creates new shadow images every frame. Restart the game to "
+                       "apply.",
     },
     BuiltinPatch{
         .name = "Full Scene Resolution with FXAA (built-in)",
