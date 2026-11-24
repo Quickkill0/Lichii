@@ -2743,16 +2743,24 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) noexc
     // was first written in an earlier frame, which the title redraws every frame: Mario Kart World
     // bakes terrain once with depth-tested draws (b7980efd7), and a bound depth buffer alone
     // doesn't test (Eglantine #874). Mesh draws follow the same rules unless a stage writes
-    // storage: a new task/mesh pipeline can take the driver seconds to build, and waiting for it
-    // froze Ocarina of Time for 3.3 s on an RTX 4090 when it entered a new area.
+    // storage or samples are counted: a new task/mesh pipeline can take the driver seconds to
+    // build, and waiting for it froze Ocarina of Time for 3.3 s on an RTX 4090 when it entered a
+    // new area.
+    const bool skip_mesh = SkipPendingMeshDraw();
+    if (skip_mesh) {
+        LogSkippedPipelineLookup(true);
+        return nullptr;
+    }
     const bool mesh = regs.IsMeshEnabled();
-    const bool stages_allow_skip = NativeStagesAllowSkip(mesh, pipeline->WritesStorage());
+    const bool writes_storage = pipeline->WritesStorage();
+    const bool counts_samples = regs.zpass_pixel_count_enable != 0;
+    const bool stages_allow_skip = NativeStagesAllowSkip(mesh, writes_storage, counts_samples);
     if (native && mesh && !stages_allow_skip && mode != NativePendingMode::Wait) {
         static std::atomic<u32> logged{};
         if (logged.fetch_add(1, std::memory_order_relaxed) < 16) {
-            LOG_INFO(Render_Vulkan,
-                     "Mesh pipeline {:016x} is still building and writes storage: its draw waits",
-                     pipeline->Key().Hash());
+            LOG_INFO(Render_Vulkan, "Mesh pipeline {:016x} is still building and {}: its draw waits",
+                     pipeline->Key().Hash(),
+                     writes_storage ? "writes storage" : "the Z-pass counter is on");
         }
     }
     const auto writes_color = [&regs](u32 rt_index) {
@@ -2810,9 +2818,8 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) noexc
         }
         }
     }
-    const bool skip_mesh = SkipPendingMeshDraw();
-    if (discard || skip_mesh) {
-        LogSkippedPipelineLookup(skip_mesh);
+    if (discard) {
+        LogSkippedPipelineLookup(false);
         return nullptr;
     }
     return pipeline;
