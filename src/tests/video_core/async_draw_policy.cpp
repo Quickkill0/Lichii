@@ -52,6 +52,15 @@ TEST_CASE("Legacy pending draws retain the async heuristic", "[video_core][async
     REQUIRE_FALSE(Vulkan::CanDiscardPendingDraw(false, false, 0, 0));
 }
 
+TEST_CASE("Mesh draws can be skipped unless a stage writes storage or samples are counted",
+          "[video_core][async_draw]") {
+    REQUIRE(Vulkan::NativeStagesAllowSkip(false, false, false));
+    REQUIRE(Vulkan::NativeStagesAllowSkip(false, true, true));
+    REQUIRE(Vulkan::NativeStagesAllowSkip(true, false, false));
+    REQUIRE_FALSE(Vulkan::NativeStagesAllowSkip(true, true, false));
+    REQUIRE_FALSE(Vulkan::NativeStagesAllowSkip(true, false, true));
+}
+
 TEST_CASE("A native draw needs history on every render target it writes, through the RT map",
           "[video_core][async_draw]") {
     const auto identity = [](u32 i) { return i; };
