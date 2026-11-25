@@ -68,15 +68,20 @@ constexpr bool NativeStagesAllowSkip(bool mesh, bool writes_storage) {
 }
 
 /// Why a native draw waits for its unbuilt pipeline with no time limit in Bounded or Skip mode.
-enum class NativeWaitReason { MeshStorage, NoDepthTest, NewTarget, Count };
+enum class NativeWaitReason { MeshStorage, NoDepthTest, NoColorWrite, NewTarget, Count };
 
 /// @param mesh_storage The draw runs task/mesh programs and a stage writes storage.
 /// @param depth_test   A depth buffer is bound and the depth test is on.
-constexpr NativeWaitReason ClassifyNativeWait(bool mesh_storage, bool depth_test) {
+/// @param writes_color The draw writes color into at least one render target.
+constexpr NativeWaitReason ClassifyNativeWait(bool mesh_storage, bool depth_test,
+                                              bool writes_color) {
     if (mesh_storage) {
         return NativeWaitReason::MeshStorage;
     }
-    return depth_test ? NativeWaitReason::NewTarget : NativeWaitReason::NoDepthTest;
+    if (!depth_test) {
+        return NativeWaitReason::NoDepthTest;
+    }
+    return writes_color ? NativeWaitReason::NewTarget : NativeWaitReason::NoColorWrite;
 }
 
 /// How a native draw with an unbuilt pipeline is handled (the native_async_draws setting).
