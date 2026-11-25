@@ -2713,10 +2713,16 @@ void PipelineCache::LogBoundedWaits() {
         return;
     }
     LOG_INFO(Render_Vulkan,
-             "Bounded pipeline wait: {:.1f} ms spent in the last 10 s (budget {} ms per frame)",
+             "Bounded pipeline wait: {:.1f} ms spent in the last 10 s (budget {} ms per frame); "
+             "draws that waited for the whole build: {} mesh writing storage, {} without a depth "
+             "test, {} into render targets new this frame",
              static_cast<double>(native_wait_used_us) / 1000.0,
-             Settings::values.native_pipeline_wait_ms.GetValue());
+             Settings::values.native_pipeline_wait_ms.GetValue(),
+             native_waits[static_cast<size_t>(NativeWaitReason::MeshStorage)],
+             native_waits[static_cast<size_t>(NativeWaitReason::NoDepthTest)],
+             native_waits[static_cast<size_t>(NativeWaitReason::NewTarget)]);
     native_wait_used_us = 0;
+    native_waits.fill(0);
     window = std::chrono::steady_clock::now();
 }
 
@@ -2752,17 +2758,7 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) noexc
         return nullptr;
     }
     const bool mesh = regs.IsMeshEnabled();
-    const bool writes_storage = pipeline->WritesStorage();
-    const bool counts_samples = regs.zpass_pixel_count_enable != 0;
-    const bool stages_allow_skip = NativeStagesAllowSkip(mesh, writes_storage, counts_samples);
-    if (native && mesh && !stages_allow_skip && mode != NativePendingMode::Wait) {
-        static std::atomic<u32> logged{};
-        if (logged.fetch_add(1, std::memory_order_relaxed) < 16) {
-            LOG_INFO(Render_Vulkan, "Mesh pipeline {:016x} is still building and {}: its draw waits",
-                     pipeline->Key().Hash(),
-                     writes_storage ? "writes storage" : "the Z-pass counter is on");
-        }
-    }
+    const bool stages_allow_skip = NativeStagesAllowSkip(mesh, pipeline->WritesStorage());
     const auto writes_color = [&regs](u32 rt_index) {
         return rt_index < Maxwell::NumRenderTargets &&
                regs.rt[rt_index].format != Tegra::RenderTargetFormat::NONE &&
@@ -2798,6 +2794,12 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) noexc
     if (native) {
         switch (DecideNativePending(mode, can_discard, native_wait_budget_us)) {
         case NativeDrawAction::Wait:
+            if (mode != NativePendingMode::Wait) {
+                const bool depth_test = regs.zeta_enable != 0 && regs.depth_test_enable != 0;
+                ++native_waits[static_cast<size_t>(
+                    ClassifyNativeWait(!stages_allow_skip, depth_test))];
+                LogBoundedWaits();
+            }
             discard = false;
             break;
         case NativeDrawAction::Skip:

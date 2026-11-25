@@ -57,14 +57,26 @@ constexpr bool ColorWritesHaveHistory(u32 count, Map&& map, Writes&& writes,
 }
 
 /// Whether a native draw's stages let it be skipped while its pipeline builds. A task or mesh
-/// program that writes storage can fill buffers later work reads, and a mesh draw while the Z-pass
-/// counter runs adds to a count the game reads back, so those draws wait; other mesh draws follow
-/// the same rules as vertex draws.
+/// program that writes storage can fill buffers later work reads, so that draw waits; other mesh
+/// draws follow the same rules as vertex draws. A mesh draw while the Z-pass counter runs may be
+/// skipped too: the game reads a lower count for the frames the pipeline builds, while waiting for
+/// it froze Ocarina of Time for 3 to 5 s at a time in new areas.
 /// @param mesh           The draw runs task/mesh programs.
 /// @param writes_storage A stage of its pipeline writes storage buffers, images or global memory.
-/// @param counts_samples The Z-pass pixel counter is enabled.
-constexpr bool NativeStagesAllowSkip(bool mesh, bool writes_storage, bool counts_samples) {
-    return !mesh || (!writes_storage && !counts_samples);
+constexpr bool NativeStagesAllowSkip(bool mesh, bool writes_storage) {
+    return !mesh || !writes_storage;
+}
+
+/// Why a native draw waits for its unbuilt pipeline with no time limit in Bounded or Skip mode.
+enum class NativeWaitReason { MeshStorage, NoDepthTest, NewTarget, Count };
+
+/// @param mesh_storage The draw runs task/mesh programs and a stage writes storage.
+/// @param depth_test   A depth buffer is bound and the depth test is on.
+constexpr NativeWaitReason ClassifyNativeWait(bool mesh_storage, bool depth_test) {
+    if (mesh_storage) {
+        return NativeWaitReason::MeshStorage;
+    }
+    return depth_test ? NativeWaitReason::NewTarget : NativeWaitReason::NoDepthTest;
 }
 
 /// How a native draw with an unbuilt pipeline is handled (the native_async_draws setting).
